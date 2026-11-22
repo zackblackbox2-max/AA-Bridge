@@ -144,8 +144,13 @@ class SocketTransport(
     }
 
     companion object {
-        /** The car only reaches us over Wi-Fi Direct; anyone on the phone's other networks is refused. */
-        internal fun acceptsInterface(name: String?): Boolean = name?.startsWith("p2p") == true
+        /**
+         * The car reaches us either over Wi-Fi Direct (p2p*) or, on a SoftAP head unit, over the
+         * ordinary Wi-Fi interface the phone joined the car's hotspot with (wlan*). Everything
+         * else -- mobile data, USB tethering, loopback -- is refused.
+         */
+        internal fun acceptsInterface(name: String?): Boolean =
+            name != null && (name.startsWith("p2p") || name.startsWith("wlan"))
 
         const val PXC_PORT = 10922
         val PORTS = listOf(PXC_PORT, 10921, 10920)
