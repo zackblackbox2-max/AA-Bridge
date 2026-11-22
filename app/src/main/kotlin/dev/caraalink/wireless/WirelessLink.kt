@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.net.wifi.WpsInfo
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
@@ -24,6 +25,12 @@ import java.net.NetworkInterface
 /**
  * Wi-Fi Direct to the car: scan, push-button connect, and the car's address once the group forms.
  * [close] never removes the group, so a scan-only user can't drop the service's connection.
+ *
+ * SoftAP head units (e.g. Arkmicro ARK1668E): some units don't do Wi-Fi Direct at all. They
+ * broadcast their own hotspot, the phone joins it as an ordinary Wi-Fi client, and the car runs
+ * the same EasyConnection hello listener on tcp:10930 at the gateway address. For those, the
+ * scan list gets a synthetic "Car Wi-Fi" entry pointing at the current gateway; tapping it skips
+ * P2P entirely and goes straight to [Listener.onCarReachable] with the phone's wlan address.
  */
 @SuppressLint("MissingPermission")
 class WirelessLink(
@@ -48,6 +55,9 @@ class WirelessLink(
     private var closed = false
     private var groupFormed = false
 
+    /** Last real Wi-Fi Direct peer list; the SoftAP entry is appended to it on every publish. */
+    private var lastPeers: List<NearbyDevice> = emptyList()
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
             if (closed) return
@@ -67,6 +77,9 @@ class WirelessLink(
         override fun run() {
             if (!scanning || closed) return
             manager.discoverPeers(channel, logged("scan"))
+            // A SoftAP car never shows up as a P2P peer, so PEERS_CHANGED may never fire at all.
+            // Publishing on the scan tick is what puts the synthetic entry in front of the user.
+            publish()
             main.postDelayed(this, RESCAN_MS)
         }
     }
@@ -93,6 +106,13 @@ class WirelessLink(
 
     fun connect(address: String) {
         stopScanning()
+        if (address.startsWith(SOFTAP_PREFIX)) {
+            val host = address.removePrefix(SOFTAP_PREFIX)
+            val local = wlanAddress()
+            logger.log("SoftAP: car at $host, our wlan address ${local?.hostAddress}")
+            main.post { if (!closed) listener.onCarReachable(host, local) }
+            return
+        }
         val device = seen[address]
         val config = WifiP2pConfig().apply {
             deviceAddress = address
@@ -122,13 +142,32 @@ class WirelessLink(
     }
 
     private fun onPeerList(list: WifiP2pDeviceList) {
-        val peers = list.deviceList.filter { !it.deviceName.isNullOrBlank() }.map { d ->
+        lastPeers = list.deviceList.filter { !it.deviceName.isNullOrBlank() }.map { d ->
             seen[d.deviceAddress] = d
             // Every drive's log shows whether the car's address changes after a restart.
             logger.log("peer: '${d.deviceName}' ${d.deviceAddress} type=${d.primaryDeviceType} status=${d.status}")
             NearbyDevice(d.deviceName, d.deviceAddress, isCarType(d.primaryDeviceType))
         }
-        listener.onPeers(peers)
+        publish()
+    }
+
+    /** Real P2P peers plus the SoftAP entry, when the phone is on a Wi-Fi network with a gateway. */
+    private fun publish() {
+        val softAp = softApCar()
+        listener.onPeers(if (softAp == null) lastPeers else lastPeers + softAp)
+    }
+
+    /**
+     * The gateway of the Wi-Fi network the phone is joined to. On a SoftAP head unit that IS the
+     * car, so it is offered as a tappable entry. Returns null when Wi-Fi is off or unjoined.
+     */
+    @Suppress("DEPRECATION")
+    private fun softApCar(): NearbyDevice? {
+        val wifi = context.applicationContext.getSystemService(WifiManager::class.java) ?: return null
+        val gateway = runCatching { wifi.dhcpInfo?.gateway ?: 0 }.getOrDefault(0)
+        if (gateway == 0) return null
+        val ip = "${gateway and 0xFF}.${(gateway shr 8) and 0xFF}.${(gateway shr 16) and 0xFF}.${(gateway shr 24) and 0xFF}"
+        return NearbyDevice("Car Wi-Fi ($ip)", SOFTAP_PREFIX + ip, true)
     }
 
     private fun onConnectionInfo(info: WifiP2pInfo) {
@@ -190,6 +229,9 @@ class WirelessLink(
     companion object {
         private const val RESCAN_MS = 8_000L
 
+        /** Marks a synthetic SoftAP entry; the rest of the address is the car's IPv4 gateway. */
+        const val SOFTAP_PREFIX = "softap:"
+
         /** The phone's own address on the Wi-Fi Direct interface, so the hello leaves through it. */
         fun p2pAddress(): Inet4Address? = runCatching {
             NetworkInterface.getNetworkInterfaces().toList()
@@ -197,6 +239,15 @@ class WirelessLink(
                 .flatMap { it.inetAddresses.toList() }
                 .filterIsInstance<Inet4Address>()
                 .firstOrNull()
+        }.getOrNull()
+
+        /** The phone's address on the ordinary Wi-Fi interface, for a SoftAP car. */
+        fun wlanAddress(): Inet4Address? = runCatching {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.name.startsWith("wlan") }
+                .flatMap { it.inetAddresses.toList() }
+                .filterIsInstance<Inet4Address>()
+                .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
         }.getOrNull()
     }
 }
