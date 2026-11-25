@@ -24,6 +24,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Reading the paired devices, to choose which one is the car, before Android 12. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <!-- Installing the downloaded update APK ourselves (instead of just
          opening the release page and making the user do it) needs this on
          API 26+, same as any app distributed outside the Play Store. -->
@@ -89,6 +91,16 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice|microphone|location" />
 
+
+        <!-- The car's Bluetooth connecting starts the wireless link. ACL_CONNECTED is a protected
+             broadcast, so being exported lets the system deliver it without letting apps fake it. -->
+        <receiver
+            android:name=".wireless.CarBluetoothReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
