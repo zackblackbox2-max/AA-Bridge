@@ -37,6 +37,20 @@ object AppSettings {
     fun setWirelessCar(context: Context, car: RememberedCar?) = prefs(context).edit()
         .putString("wireless_car_name", car?.name).putString("wireless_car_address", car?.address).apply()
 
+    /**
+     * The paired Bluetooth device that is the car. Set means "connect
+     * wirelessly when the phone joins it" (dev.caraalink.wireless.CarBluetoothReceiver);
+     * null is off.
+     */
+    fun carBluetooth(context: Context): RememberedCar? {
+        val p = prefs(context)
+        val address = p.getString("car_bt_address", null) ?: return null
+        return RememberedCar(p.getString("car_bt_name", null) ?: address, address)
+    }
+
+    fun setCarBluetooth(context: Context, device: RememberedCar?) = prefs(context).edit()
+        .putString("car_bt_name", device?.name).putString("car_bt_address", device?.address).apply()
+
     fun resolutionMode(context: Context): ResolutionMode =
         when (prefs(context).getString("video_resolution_mode", "auto")) {
             "custom" -> ResolutionMode.CUSTOM
