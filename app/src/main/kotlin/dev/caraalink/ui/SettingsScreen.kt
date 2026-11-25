@@ -1,6 +1,9 @@
 package dev.caraalink.ui
 
+import android.Manifest
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -16,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -28,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +55,8 @@ import androidx.compose.ui.unit.dp
 import dev.caraalink.R
 import dev.caraalink.settings.SettingsActivity
 import dev.caraalink.update.UpdateChecker
+import dev.caraalink.wireless.CarBluetooth
+import dev.caraalink.wireless.RememberedCar
 
 /** Page with a back arrow and a title; Settings, Help and About share it. */
 @Composable
@@ -103,6 +110,63 @@ private fun WirelessCarRow() {
                     car = null
                 }) { Text(stringResource(R.string.settings_forget), fontWeight = FontWeight.Bold) }
             },
+        )
+        BluetoothConnectRow()
+    }
+}
+
+/** Connect by itself when the phone joins the car's Bluetooth: on once a paired device is chosen as the car. */
+@Composable
+private fun BluetoothConnectRow() {
+    val context = LocalContext.current
+    var device by remember { mutableStateOf(AppSettings.carBluetooth(context)) }
+    var choices by remember { mutableStateOf<List<RememberedCar>?>(null) }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) choices = CarBluetooth.paired(context)
+    }
+    val set: (Boolean) -> Unit = { on ->
+        when {
+            !on -> {
+                AppSettings.setCarBluetooth(context, null)
+                device = null
+            }
+            CarBluetooth.hasPermission(context) -> choices = CarBluetooth.paired(context)
+            else -> askPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+    }
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        headlineContent = { Text(stringResource(R.string.settings_bt_title), style = MaterialTheme.typography.bodyLarge) },
+        supportingContent = {
+            val name = device?.name
+            Text(if (name == null) stringResource(R.string.settings_bt_off) else stringResource(R.string.settings_bt_on, name))
+        },
+        leadingContent = { Icon(painterResource(R.drawable.ic_wifi), contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        trailingContent = { Switch(checked = device != null, onCheckedChange = set) },
+        modifier = Modifier.clickable { set(device == null) },
+    )
+    choices?.let { list ->
+        AlertDialog(
+            onDismissRequest = { choices = null },
+            title = { Text(stringResource(R.string.bt_pick_title)) },
+            text = {
+                Column {
+                    if (list.isEmpty()) Text(stringResource(R.string.bt_pick_empty))
+                    for (choice in list) {
+                        ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            headlineContent = { Text(choice.name) },
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                AppSettings.setCarBluetooth(context, choice)
+                                device = choice
+                                choices = null
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { choices = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 }
