@@ -103,4 +103,10 @@
     <string name="tile_link">Link</string>
     <string name="link_wireless_short">Wireless</string>
     <string name="link_cable_short">Cable</string>
+    <string name="cancel">Cancel</string>
+    <string name="settings_bt_title">Connect when I get in the car</string>
+    <string name="settings_bt_off">Starts the wireless connection by itself when your phone joins the car\'s Bluetooth.</string>
+    <string name="settings_bt_on">Starts when your phone joins %1$s. Keep the car screen on its phone-link page.</string>
+    <string name="bt_pick_title">Which one is your car?</string>
+    <string name="bt_pick_empty">No paired Bluetooth devices. Pair your phone with the car first.</string>
 </resources>
