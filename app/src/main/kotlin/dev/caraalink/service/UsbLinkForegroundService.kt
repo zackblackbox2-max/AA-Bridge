@@ -82,6 +82,10 @@ class UsbLinkForegroundService : Service() {
     private var connectingTo: String? = null
     private var carHost: Pair<String, InetAddress?>? = null
     private var wirelessStreamed = false
+    /** The search was started by the car's Bluetooth connecting, not by the driver. */
+    private var autoSearch = false
+    /** True once this service has gone foreground for a car link. */
+    private var foregroundStarted = false
     private var wirelessTimeout: Runnable? = null
     private var reconnectUntil = 0L
 
@@ -138,7 +142,13 @@ class UsbLinkForegroundService : Service() {
                 val address = intent.getStringExtra(EXTRA_CAR_ADDRESS)
                 val target = address?.let { RememberedCar(intent.getStringExtra(EXTRA_CAR_NAME) ?: it, it) }
                     ?: AppSettings.wirelessCar(this)
-                beginWireless(target)
+                beginWireless(target, auto = intent.getBooleanExtra(EXTRA_AUTO, false))
+            }
+            ACTION_REFRESH_FOREGROUND -> {
+                // The app is on screen now, so Android grants the microphone and location types it
+                // refused to a start from the background.
+                // A service this intent created has no link to refresh; one between reconnects still does.
+                if (!foregroundStarted) stopSelf() else runCatching { startForegroundWithMic() }
             }
             ACTION_STOP -> {
                 Log.i(TAG, "onStartCommand: ACTION_STOP")
@@ -303,12 +313,14 @@ class UsbLinkForegroundService : Service() {
             try {
                 startForeground(NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or location)
+                foregroundStarted = true
                 return
             } catch (e: SecurityException) {
                 Log.w(TAG, "startForeground with microphone refused -- retrying connectedDevice only", e)
             }
         }
         startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or location)
+        foregroundStarted = true
     }
 
     private fun needsLocationForWifiDirect() = Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2
@@ -318,7 +330,8 @@ class UsbLinkForegroundService : Service() {
 
     // --- wireless ---
 
-    private fun beginWireless(target: RememberedCar?) {
+    /** [auto] is a start nobody asked for (the car's Bluetooth connected): it looks for longer and gives up quietly. */
+    private fun beginWireless(target: RememberedCar?, auto: Boolean = false) {
         // startForegroundService needs startForeground even when there turns out to be nothing to do.
         startForegroundWithMic(wireless = true)
         if (target == null || ConnectionStateHolder.snapshot.link == CarLink.CABLE) {
@@ -338,7 +351,9 @@ class UsbLinkForegroundService : Service() {
         }
         startWirelessSession()
         wirelessLink = WirelessLink(this, wirelessLog, wirelessListener).also { it.scan() }
-        armWirelessTimeout(SEARCH_TIMEOUT_MS) { endWireless(WirelessPhase.NOT_FOUND) }
+        autoSearch = auto
+        // The head unit is still booting when Bluetooth connects, and the driver has yet to open its phone-link page.
+        armWirelessTimeout(if (auto) AUTO_SEARCH_TIMEOUT_MS else SEARCH_TIMEOUT_MS) { endWireless(WirelessPhase.NOT_FOUND) }
     }
 
     private fun startWirelessSession() {
@@ -458,7 +473,8 @@ class UsbLinkForegroundService : Service() {
 
     private fun endWireless(phase: WirelessPhase) {
         wirelessLog.log("wireless ended: $phase")
-        ConnectionStateHolder.update { it.copy(wireless = phase) }
+        val shown = phaseToShow(phase, autoSearch, wirelessStreamed)
+        ConnectionStateHolder.update { it.copy(wireless = shown) }
         stopping = true
         stopSelfCleanly()
     }
@@ -638,6 +654,7 @@ class UsbLinkForegroundService : Service() {
         private val QD_RECONNECT_DELAYS_MS = longArrayOf(6_000, 6_000, 10_000, 30_000, 60_000)
         private const val OPEN_TO_RECONNECT_ID = 4
         private const val SEARCH_TIMEOUT_MS = 30_000L
+        private const val AUTO_SEARCH_TIMEOUT_MS = 180_000L
         private const val CONNECT_TIMEOUT_MS = 30_000L
         private const val RECONNECT_WINDOW_MS = 120_000L
         private const val HELLO_WAIT_MS = 3_000L
@@ -647,6 +664,10 @@ class UsbLinkForegroundService : Service() {
         const val ACTION_STOP = "dev.caraalink.service.action.STOP"
         const val ACTION_START_SESSION = "dev.caraalink.service.action.START_SESSION"
         /** A session that just failed stops the service; a leftover ERROR seen by a later update must not. */
+        /** A search nobody asked for that never reached the car ends without an error on Home. */
+        internal fun phaseToShow(phase: WirelessPhase, autoSearch: Boolean, streamed: Boolean): WirelessPhase =
+            if (autoSearch && !streamed && (phase == WirelessPhase.NOT_FOUND || phase == WirelessPhase.FAILED)) WirelessPhase.IDLE else phase
+
         internal fun shouldStopOnError(previous: ConnectionPhase?, snapshot: ConnectionSnapshot): Boolean =
             snapshot.phase == ConnectionPhase.ERROR && previous != ConnectionPhase.ERROR && snapshot.link != CarLink.WIRELESS
 
@@ -655,6 +676,8 @@ class UsbLinkForegroundService : Service() {
             if (now < reconnectUntil) null else WirelessPhase.FAILED
 
         const val ACTION_START_WIRELESS = "dev.caraalink.service.action.START_WIRELESS"
+        const val ACTION_REFRESH_FOREGROUND = "dev.caraalink.service.action.REFRESH_FOREGROUND"
+        const val EXTRA_AUTO = "auto"
         const val EXTRA_CAR_ADDRESS = "car_address"
         const val EXTRA_CAR_NAME = "car_name"
     }
