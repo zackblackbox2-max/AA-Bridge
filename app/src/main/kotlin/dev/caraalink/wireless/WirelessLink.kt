@@ -183,7 +183,19 @@ class WirelessLink(
         val gateway = runCatching { wifi.dhcpInfo?.gateway ?: 0 }.getOrDefault(0)
         if (gateway == 0) return null
         val ip = "${gateway and 0xFF}.${(gateway shr 8) and 0xFF}.${(gateway shr 16) and 0xFF}.${(gateway shr 24) and 0xFF}"
-        return NearbyDevice("Car Wi-Fi ($ip)", SOFTAP_PREFIX + ip, true)
+        // The network's own name is what the driver recognises; the address still carries the IP to reach.
+        return NearbyDevice(ssid() ?: "Car Wi-Fi ($ip)", SOFTAP_PREFIX + ip, true)
+    }
+
+    /**
+     * The joined network's name without its quotes, or null when Android withholds it --
+     * it returns "<unknown ssid>" without the location permission Wi-Fi Direct already needs.
+     */
+    @Suppress("DEPRECATION")
+    private fun ssid(): String? {
+        val wifi = context.applicationContext.getSystemService(WifiManager::class.java) ?: return null
+        val raw = runCatching { wifi.connectionInfo?.ssid }.getOrNull()?.trim('"')?.trim() ?: return null
+        return raw.takeIf { it.isNotBlank() && !it.startsWith("<unknown") && it != "0x" }
     }
 
     private fun onConnectionInfo(info: WifiP2pInfo) {
