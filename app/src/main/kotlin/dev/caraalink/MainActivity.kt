@@ -47,7 +47,6 @@ class MainActivity : ComponentActivity() {
         dev.caraalink.diagnostics.CrashMarker.consumeLastCrash(this)?.let { summary ->
             Toast.makeText(this, "Restarted after a crash: $summary", Toast.LENGTH_LONG).show()
         }
-        dev.caraalink.update.UpdateChecker.checkIfDue(this)
         maybeAutoStartOnAttach(intent)
         maybeStartAaTls(intent)
         val firstScreen = if (AppSettings.setupComplete(this)) Screen.HOME else Screen.SETUP
@@ -177,6 +176,17 @@ class MainActivity : ComponentActivity() {
         val canScan = checkSelfPermission(dev.caraalink.ui.NEARBY_PERMISSION) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (canScan && dev.caraalink.ui.shouldAutoConnect(dev.caraalink.connection.ConnectionStateHolder.snapshot, AppSettings.wirelessCar(this) != null)) {
             dev.caraalink.ui.startWireless(this)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // A link started from the background (the car's Bluetooth connecting) runs without the microphone
+        // and location; with the app on screen the service can take them.
+        if (dev.caraalink.connection.ConnectionStateHolder.snapshot.link != dev.caraalink.connection.CarLink.NONE) {
+            runCatching {
+                startService(Intent(this, UsbLinkForegroundService::class.java).setAction(UsbLinkForegroundService.ACTION_REFRESH_FOREGROUND))
+            }
         }
     }
 
